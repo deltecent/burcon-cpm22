@@ -18,7 +18,11 @@
 	 maclib	cpmsize		;bring in memory and bios size
 ccpLen	 equ	0800h		;CPM 2.2 fixed
 bdosLen	 equ	0e00h		;CPM 2.2 fixed
+	 if	memSize
 ccpBase	 equ	memSize*1024 - biosLen - bdosLen - ccpLen
+	 else			;creating a relocatable image
+ccpBase	 equ	0
+	 endif
 dosEnt	 equ	(ccpBase+ccpLen+6)	 ;entry address of BDOS
 biosBase equ	(ccpBase+ccpLen+bdosLen) ;base address of this BIOS
 bootSiz	 equ	3*128			 ;3 sectors for boot code
@@ -57,8 +61,7 @@ secLen	equ	128		;length of CPM sector
 ;   the Altair drive. It is located 0100h bytes below the where
 ;   the CCP is loaded
 
-	org	ccpBase-0100h
-altBuf	ds	137		;altair disk buffer
+altBuf	equ	ccpBase-0100h	;altair disk buffer
 
 ; Tracks 0-5 of Altair disks have this format
 
@@ -73,27 +76,28 @@ t0CSum	equ	132		;offset of checksum
 ;     then jump to the cold start BIOS entry.
 ;-----------------------------------------------------------------------------
 	org	0
+reloc	equ	$
 start	lxi	sp,ccpBase	;stack grows down from lowest cpm address
 	di
 	xra	a		;select drive zero
 	out	drvSel
 selDrv	in	drvStat		;verify it was selected
 	ani	selMask
-	jnz	selDrv
+	jnz	selDrv-reloc
 	mvi	a,dcLoad	;load the head
 	out	drvCtl
-	jmp	chkTrk0		;go see if we're already on track 0
+	jmp	chkTrk0-reloc	;go see if we're already on track 0
 
 ; seek0 - seek to track zero
 
 seek0	in	drvStat		;loop until it's OK to move the head
 	ani	moveMsk
-	jnz	seek0
+	jnz	seek0-reloc
 	mvi	a,dcStepO	;step out one track
 	out	drvCtl
 chkTrk0	in	drvStat		;loop until we get to track 0
 	ani	trk0Msk
-	jnz	seek0
+	jnz	seek0-reloc
 
 ; Load track 0 content into memory. Odd tracks are read 1st and stored
 ;    in every other 128 byte block. Then even tracks are read to fill
@@ -101,18 +105,18 @@ chkTrk0	in	drvStat		;loop until we get to track 0
 
 	lxi	b,0100h		;b=sector 1, c=track 0 
 	lxi	h,loadTk0	;track 0 load address
-	call	loadTrk		;load all track 0 data
+	call	loadTrk-reloc	;load all track 0 data
 
 ; Load track 1 content in the same manner.
 
 chkTrk1	in	drvStat		;wait until OK to move the head
 	ani	moveMsk
-	jnz	chkTrk1
+	jnz	chkTrk1-reloc
 	mvi	a,dcStepI	;step in one track to track 1
 	out	drvCtl
 	lxi	b,0101h		;b=sector 1, c=track 1
 	lxi	h,loadTk1	;track 1 load address
-	call	loadTrk		;load off track 1 data
+	call	loadTrk-reloc	;load off track 1 data
 
 ;  A flag is present in the BIOS that determines whether interrupts are
 ;    re-enabled or left disabled after executing disk code. That flag is
@@ -134,7 +138,7 @@ loadTrk	push	b		;save sector and track number we're on
 	push	h		;save destination address
 	mov	a,h
 	cpi	(ccpBase shr 8)  ;current address < cpp start addr?
-	jc	nxtSec		;yes, move to next sector
+	jc	nxtSec-reloc	;yes, move to next sector
 
 ; The following code was used to set an upper limit into which code would be
 ;    loaded. The first load puts the byte from location 0xff into A. The very
@@ -146,10 +150,10 @@ loadTrk	push	b		;save sector and track number we're on
 ;	lda	0ffh		;upper limit stored in boot code at offset 0xff
 ;	mvi	a,0ffH		;over-ridden here. 0xff does nothing
 ;	cmp	h		;commented out so the upper limit is ignored
-;	jc	nxtSec
+;	jc	nxtSec-reloc
 		
-	call	read		;read a sector
-	jnz	start		;fatal read error, try again
+	call	read-reloc	;read a sector
+	jnz	start-reloc	;fatal read error, try again
 nxtSec	pop	h		;get the destination pointer back
 	lxi	d,0100h		;increment destination by 256 bytes
 	dad	d
@@ -158,13 +162,13 @@ nxtSec	pop	h		;get the destination pointer back
 	adi	2		;jump 2 setors each read
 	mov	b,a
 	cpi	numSect+1	;past 32 sectors?
-	jc	loadTrk		;not yet, keep reading
+	jc	loadTrk-reloc	;not yet, keep reading
 	sui	numSect-1	;compute starting even sector number
 	lxi	d,-0f80h	;compute load address for 1st even sector
 	dad	d
 	cpi	3		;done both odd and even sectors?
 	mov	b,a
-	jnz	loadTrk		;no, go to even sectors
+	jnz	loadTrk-reloc	;no, go to even sectors
 	ret
 
 ;----------------------------------------------------------------------------
@@ -174,14 +178,14 @@ nxtSec	pop	h		;get the destination pointer back
 ;---------------------------------------------------------------------------
 read	push	b		;save sector number
 	push	h		;save address we're writing to next
-	call	rdPSec 		;read the sector specified in b into altBuf
+	call	rdPSec-reloc	;read the sector specified in b into altBuf
 	lxi	d,-6		;-6 bytes from the end is 0xff stop byte
 	dad	d
 	inr	m		;this should increment 0xff to zero
 	pop	b		;bc = address we're writing to
 	pop	d		;d = sector number, e = track number
 	rnz			;exit if stop byte wasn't 0xff
-	lxi	h,altBuf+t0Trk	;hl = track byte of altBuf
+	lxi	h,altBuf+t0Trk-reloc	;hl = track byte of altBuf
 	mov	a,m		;get 1st byte with track number
 	ani	07Fh		;get track number alone
 	cmp	e		;verify track number is correct
@@ -190,7 +194,7 @@ read	push	b		;save sector number
 	inx	h
 	inx	h
 	call	moveBuf		;move altBuf+t0Data to memory at (hl)
-	lxi	h,altBuf+t0CSum
+	lxi	h,altBuf+t0CSum-reloc
 	cmp	m		;verify checksum matches
 	ret
 
@@ -199,35 +203,35 @@ read	push	b		;save sector number
 ;    altBuf. Physical sector length is altLen (137) bytes.
 ;----------------------------------------------------------------------------
 rdPSec	dcr	b		;convert 1 indexed sector to 0 indexed
-	call	secSync		;sync to start of sector specified in b
+	call	secSync-reloc	;sync to start of sector specified in b
 	mvi	c,altLen	;c = length of Altair sector (137 bytes)
-	lxi	h,altBuf	;point hl to altBuf
+	lxi	h,altBuf-reloc	;point hl to altBuf
 rdLoop	in	drvStat		;get drive status byte
 	ora	a		;wait for NRDA flag true (zero)
-	jm	rdLoop
+	jm	rdLoop-reloc
 	in	drvData		;read the byte 
 	mov	m,a		;store in the read buffer
 	inx	h		;increment buffer pointer
 	dcr	c		;decrement characters remaining counter
-	jz	rdDone		;count is zero - read is done
+	jz	rdDone-reloc	;count is zero - read is done
 	dcr	c		;decrement count for 2nd byte about to be read
 	nop			;timing
 	in	drvData		;get the 2nd byte
 	mov	m,a		;store in the read buffer
 	inx	h		;increment buffer pointer
-	jnz	rdLoop		;loop until all bytes read
+	jnz	rdLoop-reloc	;loop until all bytes read
 rdDone	xra	a		;return status of zero = good read
 	ret
 
 ; secSync - sync to start of sector specified in b.
 
-secSync	call	ldHead		;load the drive head
+secSync	call	ldHead-reloc		;load the drive head
 wtSecTr	in	drvSec
 	rar
-	jc	wtSecTr
+	jc	wtSecTr-reloc
 	ani	01fh		;get sector number alone
 	cmp	b		;match sector number we're looking for
-	jnz	wtSecTr		
+	jnz	wtSecTr-reloc
 	ret
 
 ;----------------------------------------------------------------------------
@@ -243,7 +247,7 @@ movLoop	mov	a,m		;move from (hl) to (bc)
 	inx	h		;increment both pointers
 	inx	b
 	dcr	e		;loop until all characters moved
-	jnz	movLoop
+	jnz	movLoop-reloc
 	ret
 
 ;----------------------------------------------------------------------------
@@ -256,6 +260,10 @@ ldHead	in	drvStat
 	mvi	a,dcLoad	;issue the load head command
 	out	drvCtl
 	ret
+
+        rept    (start +0180h - $)	;boot is exactly 180h length
+        db      0
+        endm
 
 	end
 
