@@ -1,0 +1,3 @@
+memSize	equ	59		;memory size in K bytes
+biosLen	equ	0700h		;BIOS length in bytes
+
