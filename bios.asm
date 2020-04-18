@@ -13,9 +13,18 @@
 	 maclib	cpmsize		;bring in memory and bios size
 ccpLen	 equ	0800h		;CPM 2.2 fixed
 bdosLen	 equ	0e00h		;CPM 2.2 fixed
+	 if	memSize
 ccpBase	 equ	memSize*1024 - biosLen - bdosLen - ccpLen
 bdosEnt	 equ	(ccpBase+ccpLen+6)	 ;entry address of BDOS
 biosBase equ	(ccpBase+ccpLen+bdosLen) ;base address of this BIOS
+	 org	biosBase
+	 else
+biosBase equ	(ccpLen+bdosLen) ;base address of this BIOS
+	 org	biosBase
+relBias	 equ	$-biosBase	 ;get relocation bias
+ccpBase	 equ	$-bdosLen-ccpLen
+bdosEnt	 equ	$-bdosLen	 ;entry address of BDOS
+	 endif
 bootSiz	 equ	3*128			 ;3 sectors for boot code
 loadTk0	 equ	(ccpBase-bootSiz)	 ;wboot load address for track 0
 loadTk1	 equ	(loadTk0 + 01000h)	 ;wboot load address for track 1
@@ -81,7 +90,6 @@ unTrack	equ	07fh		;unknown track number
 cr	equ	13		;ascii for carriage return
 lf	equ	10		;ascii for line feed
 
-	org	biosBase
 ;-----------------------------------------------------------------------------
 ;
 ;  BIOS Entry Jump Table
@@ -108,7 +116,7 @@ wboote	jmp	wboot		;warm start
 ;  CPM Welcome Message
 
 cpmStr	db	cr, lf, lf
-cpmSize db	'59K CP/M', cr, lf
+cpmSize db	'64K CP/M', cr, lf
 	db	'Version 2.2mits (07/28/80)', cr, lf
 	db	'Copyright 1980 by Burcon Inc.', cr, lf, 0
 
@@ -127,6 +135,7 @@ boot	xra	a
 	lxi	h,biosEnd	;cpm size marker
 	mov	a,h		;convert MSB of CPM marker to 1K count
 	ani	0fch		;get bits for 1K inrcrements
+	jz	welcome		;0 will assume 64K
 	rar
 	rar
 	mvi	l,'0'		;start with ascii "0" for the 10's digit
@@ -142,7 +151,7 @@ tenDone adi	03ah		;compute final 1's digit in ascii
 
 ;  Output the CPM welcome message
 
-	lxi	h,cpmStr	;hl = address of cpm welcome message
+welcome	lxi	h,cpmStr	;hl = address of cpm welcome message
 welOut	mov	c,m
 	call	conout
 	inx	h
@@ -1038,7 +1047,7 @@ csv3	ds	cks
 
 ;  End of BIOS equate
 
-biosEnd	equ	$+255		;round msb up to next 256 byte boundary
+biosEnd	equ	($ AND 0fc00h)+0400h+relBias	;round msb up to next 1K boundary
 
 	end
 
